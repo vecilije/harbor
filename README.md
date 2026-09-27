@@ -76,8 +76,9 @@ For private ghcr.io images, run `docker login ghcr.io` before deploying and pass
 
 ## Adding an app
 
-1. Add `postgres <name>` or `mongo <name>` to [databases.txt](databases.txt) and add
-   the GitHub secret `<ENGINE>_PASSWORD_<NAME>`. Push; the deploy creates the
+1. Add `postgres <name>` or `mongo <name>` to [databases.txt](databases.txt), add
+   the GitHub secret `<ENGINE>_PASSWORD_<NAME>`, and pass it to the Deploy step in
+   [deploy.yml](.github/workflows/deploy.yml). Push; the deploy creates the
    database and a user that can use only that database.
 2. In the app repo, set the connection string from the contract above and deploy
    with the Traefik labels and external networks.

@@ -5,21 +5,20 @@
 # Environment:
 #   DOCKER_HOST  e.g. ssh://vm
 #   ACME_EMAIL   Let's Encrypt account email
-#   SECRETS      JSON object with POSTGRES_ROOT_PASSWORD, MONGO_ROOT_PASSWORD and
-#                <ENGINE>_PASSWORD_<NAME> for every line of databases.txt
+#   POSTGRES_ROOT_PASSWORD, MONGO_ROOT_PASSWORD
+#   <ENGINE>_PASSWORD_<NAME>  one for every line of databases.txt
 set -euo pipefail
 cd "$(dirname "$0")"
 
-: "${ACME_EMAIL:?}" "${SECRETS:?}"
+: "${ACME_EMAIL:?}"
 stack=harbor
 
 fail() { echo "$*" >&2; exit 1; }
 
 # Passwords end up in connection strings, SQL and JavaScript, so keep them to URL-safe characters.
 secret() {
-  local value
-  value=$(jq -r --arg key "$1" '.[$key] // empty' <<<"$SECRETS")
-  [[ -n $value ]] || fail "Missing GitHub secret $1"
+  local value=${!1:-}
+  [[ -n $value ]] || fail "Missing $1: add it to the GitHub secrets and to the Deploy step in deploy.yml"
   [[ $value =~ ^[A-Za-z0-9_-]{16,}$ ]] ||
     fail "$1 must be at least 16 characters of A-Z a-z 0-9 _ - (try: openssl rand -hex 32)"
   printf '%s' "$value"

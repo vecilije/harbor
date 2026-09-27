@@ -36,5 +36,9 @@ jobs:
         env:
           DOCKER_HOST: ssh://vm
           ACME_EMAIL: ${{ vars.ACME_EMAIL }}
-          SECRETS: ${{ toJSON(secrets) }}
+          POSTGRES_ROOT_PASSWORD: ${{ secrets.POSTGRES_ROOT_PASSWORD }}
+          MONGO_ROOT_PASSWORD: ${{ secrets.MONGO_ROOT_PASSWORD }}
+          # One per line of databases.txt.
+          POSTGRES_PASSWORD_BLOODLINE: ${{ secrets.POSTGRES_PASSWORD_BLOODLINE }}
+          MONGO_PASSWORD_FLEXIDIM: ${{ secrets.MONGO_PASSWORD_FLEXIDIM }}
         run: ./deploy.sh
