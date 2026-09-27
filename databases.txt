@@ -1,0 +1,6 @@
+# One database per line: <engine> <name>, where engine is postgres or mongo.
+# Each gets a user of the same name that can use only that database. Its password
+# comes from the GitHub secret <ENGINE>_PASSWORD_<NAME>, e.g. POSTGRES_PASSWORD_BLOODLINE.
+# Removing a line does not drop the database.
+postgres bloodline
+mongo    flexidim

@@ -1,0 +1,111 @@
+# Shared services for the VM. Deployed by deploy.sh as the stack "harbor";
+# the variables below are set by that script.
+
+x-backup-environment: &backup-environment
+  BACKUP_HOUR: "3" # UTC
+  BACKUP_KEEP_DAYS: "14"
+
+services:
+  traefik:
+    image: traefik:v3.6
+    command:
+      - --providers.swarm=true
+      - --providers.swarm.exposedByDefault=false
+      - --providers.swarm.network=public
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+    ports:
+      # Host mode keeps the client IP visible to apps.
+      - { target: 80, published: 80, mode: host }
+      - { target: 443, published: 443, mode: host }
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - letsencrypt:/letsencrypt
+    networks: [public]
+    deploy:
+      placement:
+        constraints: [node.role == manager]
+
+  # Reachable by apps as postgres:5432 on the db network.
+  # A major version upgrade needs a dump and restore.
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_root_password
+    secrets: [postgres_root_password]
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    networks: [db]
+    stop_grace_period: 1m
+
+  # Reachable by apps as mongo:27017 on the db network.
+  mongo:
+    image: mongo:7.0
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD_FILE: /run/secrets/mongo_root_password
+    secrets: [mongo_root_password]
+    volumes:
+      - mongo-data:/data/db
+    networks: [db]
+    stop_grace_period: 1m
+
+  postgres-backup:
+    image: postgres:18-alpine
+    command: [/backup.sh]
+    environment:
+      <<: *backup-environment
+      ENGINE: postgres
+    configs:
+      - { source: backup_script, target: /backup.sh, mode: 0555 }
+    secrets:
+      - { source: postgres_root_password, target: root_password }
+    volumes:
+      - postgres-backups:/backups
+    networks: [db]
+
+  mongo-backup:
+    image: mongo:7.0
+    command: [/backup.sh]
+    environment:
+      <<: *backup-environment
+      ENGINE: mongo
+    configs:
+      - { source: backup_script, target: /backup.sh, mode: 0555 }
+    secrets:
+      - { source: mongo_root_password, target: root_password }
+    volumes:
+      - mongo-backups:/backups
+    networks: [db]
+
+networks:
+  public:
+    external: true
+  db:
+    external: true
+
+volumes:
+  letsencrypt:
+  postgres-data:
+  postgres-backups:
+  mongo-data:
+  mongo-backups:
+
+# Secrets and configs can't change in place, so their names carry a content hash.
+secrets:
+  postgres_root_password:
+    name: harbor_postgres_root_password_${POSTGRES_ROOT_PASSWORD_HASH}
+    file: ${SECRETS_DIR}/postgres_root_password
+  mongo_root_password:
+    name: harbor_mongo_root_password_${MONGO_ROOT_PASSWORD_HASH}
+    file: ${SECRETS_DIR}/mongo_root_password
+
+configs:
+  backup_script:
+    name: harbor_backup_script_${BACKUP_SCRIPT_HASH}
+    file: ./backup.sh
