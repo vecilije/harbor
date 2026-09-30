@@ -49,6 +49,23 @@ login_policy_body() {
     with_entries(select(.key as $key | $fields | split(" ") | map(select(. != "")) | index($key))) + $desired' <<<"$1"
 }
 
+# The factors an organization's users can choose from; an organization's own policy starts with none.
+ensure_factors() {
+  local org=$1 type current
+  current=$(api POST /management/v1/policies/login/second_factors/_search '{}' "$org" | jq -r '[.result[]?] | join(" ")')
+  for type in SECOND_FACTOR_TYPE_OTP SECOND_FACTOR_TYPE_U2F; do
+    [[ " $current " == *" $type "* ]] && continue
+    api POST /management/v1/policies/login/second_factors "{\"type\": \"$type\"}" "$org" >/dev/null
+    echo "zitadel: second factor $type allowed"
+  done
+  current=$(api POST /management/v1/policies/login/auth_factors/_search '{}' "$org" | jq -r '[.result[]?] | join(" ")')
+  for type in MULTI_FACTOR_TYPE_U2F_WITH_VERIFICATION; do
+    [[ " $current " == *" $type "* ]] && continue
+    api POST /management/v1/policies/login/multi_factors "{\"type\": \"$type\"}" "$org" >/dev/null
+    echo "zitadel: multi-factor $type allowed"
+  done
+}
+
 for _ in {1..24}; do
   curl -sf -o /dev/null "$ZITADEL_URL/debug/ready" && break
   sleep 5
@@ -90,6 +107,7 @@ else
   api PUT /management/v1/policies/login "$(login_policy_body "$policy" "$desired")" "$org_id" >/dev/null
   echo "zitadel: $admin_org login policy updated (two-factor required)"
 fi
+ensure_factors "$org_id"
 
 # The admin's email address; there is no mail server to verify it with, so it is set as verified.
 domain=${ZITADEL_URL#*://}

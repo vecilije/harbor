@@ -129,11 +129,13 @@ differs from:
 - no self-registration and no registration through external identity providers, as the default
   for every organization;
 - accounts locked after 5 wrong passwords or one-time codes;
-- a second factor required for the `Harbor` organization (the admin sets one up at the next login);
+- a second factor required for the `Harbor` organization, with an authenticator app (TOTP), a
+  security key or a passkey to choose from (the admin sets one up at the next login);
 - the admin's email address `ZITADEL_ADMIN_EMAIL` (set as verified: there is no mail server yet);
 - the service account's name, `automation`.
 
-Settings not listed there are changed in the console.
+When it changes anything, the deploy restarts the login pages, which otherwise keep Zitadel's old
+settings for up to 15 minutes. Settings not listed there are changed in the console.
 
 Apps create their own organization, project and applications in Zitadel and validate
 tokens against the issuer's keys (`https://<AUTH_DOMAIN>/oauth/v2/keys`).

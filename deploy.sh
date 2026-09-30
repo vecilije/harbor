@@ -155,7 +155,13 @@ for namespace in "$stack" "$auth_stack"; do
 done
 
 if [[ -n ${ZITADEL_TOKEN:-} ]]; then
-  ZITADEL_URL="https://$AUTH_DOMAIN" ./zitadel.sh
+  changes=$(ZITADEL_URL="https://$AUTH_DOMAIN" ./zitadel.sh)
+  echo "$changes"
+  # The login pages cache Zitadel's settings for 15 minutes, so they must reload them.
+  if grep -qv unchanged <<<"$changes"; then
+    docker service update --force --detach=false --quiet "${auth_stack}_login" >/dev/null
+    echo "zitadel: login pages restarted"
+  fi
 else
   echo "ZITADEL_TOKEN is not set, so Zitadel's settings were not applied (see README)" >&2
 fi
