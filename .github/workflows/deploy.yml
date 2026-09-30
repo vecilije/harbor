@@ -37,6 +37,8 @@ jobs:
           DOCKER_HOST: ssh://vm
           ACME_EMAIL: ${{ vars.ACME_EMAIL }}
           AUTH_DOMAIN: ${{ vars.AUTH_DOMAIN }}
+          ZITADEL_ADMIN_EMAIL: ${{ vars.ZITADEL_ADMIN_EMAIL }}
+          ZITADEL_TOKEN: ${{ secrets.ZITADEL_TOKEN }}
           POSTGRES_ROOT_PASSWORD: ${{ secrets.POSTGRES_ROOT_PASSWORD }}
           MONGO_ROOT_PASSWORD: ${{ secrets.MONGO_ROOT_PASSWORD }}
           ZITADEL_MASTERKEY: ${{ secrets.ZITADEL_MASTERKEY }}

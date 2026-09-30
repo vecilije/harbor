@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Deploys the harbor stack to the Swarm that DOCKER_HOST points at, makes sure every
-# database in databases.txt exists with its own user and password, then deploys the
-# auth stack (Zitadel), which needs its database to exist.
+# database in databases.txt exists with its own user and password, deploys the auth
+# stack (Zitadel), which needs its database to exist, and applies Zitadel's settings.
 #
 # Environment:
 #   DOCKER_HOST  e.g. ssh://vm
@@ -12,10 +12,12 @@
 #   ZITADEL_MASTERKEY            exactly 32 characters; encrypts Zitadel's secrets, never change it
 #   ZITADEL_ADMIN_PASSWORD       initial password of the first admin, changed on first login
 #   ZITADEL_LOGIN_COOKIE_SECRET  signs the login pages' session cookie, at least 32 characters
+#   ZITADEL_ADMIN_EMAIL          email address of the first admin
+#   ZITADEL_TOKEN                the automation service account's token; the first deploy creates it
 set -euo pipefail
 cd "$(dirname "$0")"
 
-: "${ACME_EMAIL:?}" "${AUTH_DOMAIN:?}"
+: "${ACME_EMAIL:?}" "${AUTH_DOMAIN:?}" "${ZITADEL_ADMIN_EMAIL:?}"
 stack=harbor
 auth_stack=auth
 
@@ -97,7 +99,7 @@ FirstInstance:
       Password: '$admin_password'
 YAML
 
-export ACME_EMAIL AUTH_DOMAIN ZITADEL_LOGIN_COOKIE_SECRET SECRETS_DIR=$tmp
+export ACME_EMAIL AUTH_DOMAIN ZITADEL_ADMIN_EMAIL ZITADEL_LOGIN_COOKIE_SECRET SECRETS_DIR=$tmp
 POSTGRES_ROOT_PASSWORD_HASH=$(short_hash <"$tmp/postgres_root_password")
 MONGO_ROOT_PASSWORD_HASH=$(short_hash <"$tmp/mongo_root_password")
 BACKUP_SCRIPT_HASH=$(short_hash <backup.sh)
@@ -151,3 +153,9 @@ for namespace in "$stack" "$auth_stack"; do
       xargs -r docker "$kind" rm >/dev/null 2>&1 || true
   done
 done
+
+if [[ -n ${ZITADEL_TOKEN:-} ]]; then
+  ZITADEL_URL="https://$AUTH_DOMAIN" ./zitadel.sh
+else
+  echo "ZITADEL_TOKEN is not set, so Zitadel's settings were not applied (see README)" >&2
+fi

@@ -32,12 +32,14 @@ services:
       ZITADEL_FIRSTINSTANCE_INSTANCENAME: Harbor
       ZITADEL_FIRSTINSTANCE_ORG_NAME: Harbor
       ZITADEL_FIRSTINSTANCE_ORG_HUMAN_USERNAME: admin
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_EMAIL_ADDRESS: ${ZITADEL_ADMIN_EMAIL}
       ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORDCHANGEREQUIRED: "true"
-      # A service account with the IAM_OWNER role for Terraform; its token is written to the bootstrap volume.
-      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_USERNAME: terraform
-      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_NAME: Terraform
+      # A service account with the IAM_OWNER role that configures Zitadel through its API (zitadel.sh
+      # and the apps' scripts); its token is written to the bootstrap volume.
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_USERNAME: automation
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_NAME: Automation
       ZITADEL_FIRSTINSTANCE_ORG_MACHINE_PAT_EXPIRATIONDATE: "2099-01-01T00:00:00Z"
-      ZITADEL_FIRSTINSTANCE_PATPATH: /zitadel/bootstrap/terraform.pat
+      ZITADEL_FIRSTINSTANCE_PATPATH: /zitadel/bootstrap/automation.pat
       ZITADEL_FIRSTINSTANCE_ORG_LOGINCLIENT_MACHINE_USERNAME: login-client
       ZITADEL_FIRSTINSTANCE_ORG_LOGINCLIENT_MACHINE_NAME: Login client
       ZITADEL_FIRSTINSTANCE_ORG_LOGINCLIENT_PAT_EXPIRATIONDATE: "2099-01-01T00:00:00Z"
@@ -115,7 +117,7 @@ networks:
     external: true
 
 volumes:
-  # Tokens written when the first instance is created: login-client.pat and terraform.pat.
+  # Tokens written when the first instance is created: login-client.pat and automation.pat.
   bootstrap:
 
 # Secrets can't change in place, so their names carry a content hash.

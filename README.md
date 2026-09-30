@@ -10,7 +10,8 @@ stack `auth`. Every push to `main` deploys them through
 | [stack.yml](stack.yml) | Traefik, PostgreSQL, MongoDB, backups |
 | [auth.yml](auth.yml) | Zitadel and its login pages |
 | [databases.txt](databases.txt) | One database and user per app (and one for Zitadel) |
-| [deploy.sh](deploy.sh) | Creates networks, deploys `harbor`, creates databases, deploys `auth` |
+| [deploy.sh](deploy.sh) | Creates networks, deploys `harbor`, creates databases, deploys `auth`, runs `zitadel.sh` |
+| [zitadel.sh](zitadel.sh) | Applies Zitadel's instance-wide settings through its API |
 | [backup.sh](backup.sh) | Daily dump of every database, plus restore |
 
 ## Contract with app repos
@@ -73,8 +74,10 @@ For private ghcr.io images, run `docker login ghcr.io` before deploying and pass
    | `ZITADEL_MASTERKEY` | Exactly 32 characters: `openssl rand -hex 16` |
    | `ZITADEL_LOGIN_COOKIE_SECRET` | At least 32 characters |
    | `ZITADEL_ADMIN_PASSWORD` | First admin's initial password: 12+ characters with upper and lower case letters, a digit and a symbol |
+   | `ZITADEL_TOKEN` | Added after the first deploy: the automation service account's token (see [Zitadel](#zitadel)) |
 
-   and the variables `ACME_EMAIL` (for Let's Encrypt) and `AUTH_DOMAIN` (Zitadel's domain).
+   and the variables `ACME_EMAIL` (for Let's Encrypt), `AUTH_DOMAIN` (Zitadel's domain) and
+   `ZITADEL_ADMIN_EMAIL` (the first admin's email address).
 
    Passwords must be at least 16 characters of `A-Z a-z 0-9 _ -` so they work in
    connection strings unescaped. Use `openssl rand -hex 32`. `ZITADEL_ADMIN_PASSWORD`
@@ -106,18 +109,31 @@ The first deploy creates an instance with the organization `Harbor` for instance
 administrators:
 
 - The admin logs in at `https://<AUTH_DOMAIN>/ui/console` as
-  `admin@harbor.<AUTH_DOMAIN>` with `ZITADEL_ADMIN_PASSWORD`, and must set a new
-  password right away. Changing the secret later has no effect.
-- A service account `terraform` with the instance owner role, for configuring
-  Zitadel from app repos. Its token is written once to the `auth_bootstrap` volume.
-  Copy it into the app repo's secrets, then delete it from the VM:
+  `admin@harbor.<AUTH_DOMAIN>` with `ZITADEL_ADMIN_PASSWORD`, and must set a new password right
+  away. Changing the secret later has no effect.
+- A service account `automation` with the instance owner role configures Zitadel through its API.
+  Its token is written once to the `auth_bootstrap` volume. Copy it into the GitHub secret
+  `ZITADEL_TOKEN` of this repo and of every app repo that configures Zitadel, then delete it from
+  the VM:
 
   ```bash
-  docker run --rm -v auth_bootstrap:/bootstrap alpine cat /bootstrap/terraform.pat
-  docker run --rm -v auth_bootstrap:/bootstrap alpine rm /bootstrap/terraform.pat
+  docker run --rm -v auth_bootstrap:/bootstrap alpine cat /bootstrap/automation.pat
+  docker run --rm -v auth_bootstrap:/bootstrap alpine rm /bootstrap/automation.pat
   ```
 
   Don't delete `login-client.pat` from that volume: the login pages use it.
+
+Once `ZITADEL_TOKEN` is set, every deploy runs [zitadel.sh](zitadel.sh), which changes only what
+differs from:
+
+- no self-registration and no registration through external identity providers, as the default
+  for every organization;
+- accounts locked after 5 wrong passwords or one-time codes;
+- a second factor required for the `Harbor` organization (the admin sets one up at the next login);
+- the admin's email address `ZITADEL_ADMIN_EMAIL` (set as verified: there is no mail server yet);
+- the service account's name, `automation`.
+
+Settings not listed there are changed in the console.
 
 Apps create their own organization, project and applications in Zitadel and validate
 tokens against the issuer's keys (`https://<AUTH_DOMAIN>/oauth/v2/keys`).
