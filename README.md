@@ -1,14 +1,16 @@
 # harbor
 
 The shared services on the VM, as code: Traefik, PostgreSQL, MongoDB and their
-backups, all in one Docker Swarm stack. Every push to `main` deploys it through
+backups in the Docker Swarm stack `harbor`, and the identity provider Zitadel in the
+stack `auth`. Every push to `main` deploys them through
 [deploy.yml](.github/workflows/deploy.yml). Nothing is edited by hand on the VM.
 
 | File | Purpose |
 |---|---|
 | [stack.yml](stack.yml) | Traefik, PostgreSQL, MongoDB, backups |
-| [databases.txt](databases.txt) | One database and user per app |
-| [deploy.sh](deploy.sh) | Creates networks, deploys the stack, creates databases |
+| [auth.yml](auth.yml) | Zitadel and its login pages |
+| [databases.txt](databases.txt) | One database and user per app (and one for Zitadel) |
+| [deploy.sh](deploy.sh) | Creates networks, deploys `harbor`, creates databases, deploys `auth` |
 | [backup.sh](backup.sh) | Daily dump of every database, plus restore |
 
 ## Contract with app repos
@@ -23,6 +25,7 @@ Apps never reference this repo. They rely only on these names:
 | Entrypoint | `websecure` (HTTP redirects to it) |
 | PostgreSQL | `postgresql://<name>:<password>@postgres:5432/<name>` |
 | MongoDB | `mongodb://<name>:<password>@mongo:27017/<name>` |
+| Identity provider | OpenID Connect issuer `https://<AUTH_DOMAIN>` (Zitadel) |
 
 An app's stack file looks like this:
 
@@ -67,11 +70,15 @@ For private ghcr.io images, run `docker login ghcr.io` before deploying and pass
    | `POSTGRES_ROOT_PASSWORD` | PostgreSQL superuser (`postgres`) password |
    | `MONGO_ROOT_PASSWORD` | MongoDB superuser (`root`) password |
    | `<ENGINE>_PASSWORD_<NAME>` | One per line of `databases.txt`, e.g. `MONGO_PASSWORD_FLEXIDIM` |
+   | `ZITADEL_MASTERKEY` | Exactly 32 characters: `openssl rand -hex 16` |
+   | `ZITADEL_LOGIN_COOKIE_SECRET` | At least 32 characters |
+   | `ZITADEL_ADMIN_PASSWORD` | First admin's initial password: 12+ characters with upper and lower case letters, a digit and a symbol |
 
-   and the variable `ACME_EMAIL` (for Let's Encrypt).
+   and the variables `ACME_EMAIL` (for Let's Encrypt) and `AUTH_DOMAIN` (Zitadel's domain).
 
    Passwords must be at least 16 characters of `A-Z a-z 0-9 _ -` so they work in
-   connection strings unescaped. Use `openssl rand -hex 32`.
+   connection strings unescaped. Use `openssl rand -hex 32`. `ZITADEL_ADMIN_PASSWORD`
+   is the exception.
 5. Run the Deploy workflow.
 
 ## Adding an app
@@ -85,6 +92,38 @@ For private ghcr.io images, run `docker login ghcr.io` before deploying and pass
 
 To change an app's password, update the secret and redeploy. The same works for
 `POSTGRES_ROOT_PASSWORD`, but `MONGO_ROOT_PASSWORD` is fixed once MongoDB has started.
+
+## Zitadel
+
+Zitadel runs at `https://<AUTH_DOMAIN>` from its own database, `zitadel`. It creates
+its schema itself on start, as the database's owner, so it never needs the superuser.
+
+**Keep a copy of `ZITADEL_MASTERKEY` outside GitHub** (e.g. in a password manager).
+It encrypts the keys and secrets Zitadel stores, so a database backup is useless
+without it, and it can never be changed.
+
+The first deploy creates an instance with the organization `Harbor` for instance
+administrators:
+
+- The admin logs in at `https://<AUTH_DOMAIN>/ui/console` as
+  `admin@harbor.<AUTH_DOMAIN>` with `ZITADEL_ADMIN_PASSWORD`, and must set a new
+  password right away. Changing the secret later has no effect.
+- A service account `terraform` with the instance owner role, for configuring
+  Zitadel from app repos. Its token is written once to the `auth_bootstrap` volume.
+  Copy it into the app repo's secrets, then delete it from the VM:
+
+  ```bash
+  docker run --rm -v auth_bootstrap:/bootstrap alpine cat /bootstrap/terraform.pat
+  docker run --rm -v auth_bootstrap:/bootstrap alpine rm /bootstrap/terraform.pat
+  ```
+
+  Don't delete `login-client.pat` from that volume: the login pages use it.
+
+Apps create their own organization, project and applications in Zitadel and validate
+tokens against the issuer's keys (`https://<AUTH_DOMAIN>/oauth/v2/keys`).
+
+To upgrade, bump both image tags in [auth.yml](auth.yml) together, after reading the
+release notes.
 
 ## Backups
 

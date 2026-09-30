@@ -36,9 +36,15 @@ jobs:
         env:
           DOCKER_HOST: ssh://vm
           ACME_EMAIL: ${{ vars.ACME_EMAIL }}
+          AUTH_DOMAIN: ${{ vars.AUTH_DOMAIN }}
           POSTGRES_ROOT_PASSWORD: ${{ secrets.POSTGRES_ROOT_PASSWORD }}
           MONGO_ROOT_PASSWORD: ${{ secrets.MONGO_ROOT_PASSWORD }}
+          ZITADEL_MASTERKEY: ${{ secrets.ZITADEL_MASTERKEY }}
+          ZITADEL_ADMIN_PASSWORD: ${{ secrets.ZITADEL_ADMIN_PASSWORD }}
+          ZITADEL_LOGIN_COOKIE_SECRET: ${{ secrets.ZITADEL_LOGIN_COOKIE_SECRET }}
           # One per line of databases.txt.
           POSTGRES_PASSWORD_BLOODLINE: ${{ secrets.POSTGRES_PASSWORD_BLOODLINE }}
           MONGO_PASSWORD_FLEXIDIM: ${{ secrets.MONGO_PASSWORD_FLEXIDIM }}
+          POSTGRES_PASSWORD_ZITADEL: ${{ secrets.POSTGRES_PASSWORD_ZITADEL }}
+          POSTGRES_PASSWORD_OSAGROUP: ${{ secrets.POSTGRES_PASSWORD_OSAGROUP }}
         run: ./deploy.sh

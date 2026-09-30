@@ -1,17 +1,23 @@
 #!/usr/bin/env bash
-# Deploys the harbor stack to the Swarm that DOCKER_HOST points at, then makes sure
-# every database in databases.txt exists with its own user and password.
+# Deploys the harbor stack to the Swarm that DOCKER_HOST points at, makes sure every
+# database in databases.txt exists with its own user and password, then deploys the
+# auth stack (Zitadel), which needs its database to exist.
 #
 # Environment:
 #   DOCKER_HOST  e.g. ssh://vm
 #   ACME_EMAIL   Let's Encrypt account email
+#   AUTH_DOMAIN  public domain of Zitadel, e.g. auth.example.net
 #   POSTGRES_ROOT_PASSWORD, MONGO_ROOT_PASSWORD
 #   <ENGINE>_PASSWORD_<NAME>  one for every line of databases.txt
+#   ZITADEL_MASTERKEY            exactly 32 characters; encrypts Zitadel's secrets, never change it
+#   ZITADEL_ADMIN_PASSWORD       initial password of the first admin, changed on first login
+#   ZITADEL_LOGIN_COOKIE_SECRET  signs the login pages' session cookie, at least 32 characters
 set -euo pipefail
 cd "$(dirname "$0")"
 
-: "${ACME_EMAIL:?}"
+: "${ACME_EMAIL:?}" "${AUTH_DOMAIN:?}"
 stack=harbor
+auth_stack=auth
 
 fail() { echo "$*" >&2; exit 1; }
 
@@ -63,11 +69,43 @@ JS
   fi
 done <databases.txt
 
-export ACME_EMAIL SECRETS_DIR=$tmp
+masterkey=$(secret ZITADEL_MASTERKEY)
+[[ ${#masterkey} -eq 32 ]] || fail "ZITADEL_MASTERKEY must be exactly 32 characters (try: openssl rand -hex 16)"
+printf '%s' "$masterkey" >"$tmp/zitadel_masterkey"
+ZITADEL_LOGIN_COOKIE_SECRET=$(secret ZITADEL_LOGIN_COOKIE_SECRET)
+[[ ${#ZITADEL_LOGIN_COOKIE_SECRET} -ge 32 ]] ||
+  fail "ZITADEL_LOGIN_COOKIE_SECRET must be at least 32 characters (try: openssl rand -hex 32)"
+# Zitadel's default password policy wants upper and lower case letters, a digit and a symbol.
+admin_password=${ZITADEL_ADMIN_PASSWORD:-}
+[[ $admin_password =~ ^[[:print:]]{12,}$ && $admin_password =~ [A-Z] && $admin_password =~ [a-z] &&
+  $admin_password =~ [0-9] && $admin_password =~ [^A-Za-z0-9] ]] ||
+  fail "ZITADEL_ADMIN_PASSWORD must be at least 12 characters with upper and lower case letters, a digit and a symbol"
+admin_password=${admin_password//\'/\'\'} # quoted for YAML
+# Assigned first: a failing command substitution inside a heredoc would not stop the script.
+zitadel_db_password=$(secret POSTGRES_PASSWORD_ZITADEL)
+# The DSN makes Zitadel use its own user, which owns the zitadel database, so it needs no admin access.
+cat >"$tmp/zitadel_config.yaml" <<YAML
+Database:
+  postgres:
+    DSN: postgresql://zitadel:$zitadel_db_password@postgres:5432/zitadel?sslmode=disable
+YAML
+# Setup reads the first instance from its own "steps" file, not from the config.
+cat >"$tmp/zitadel_steps.yaml" <<YAML
+FirstInstance:
+  Org:
+    Human:
+      Password: '$admin_password'
+YAML
+
+export ACME_EMAIL AUTH_DOMAIN ZITADEL_LOGIN_COOKIE_SECRET SECRETS_DIR=$tmp
 POSTGRES_ROOT_PASSWORD_HASH=$(short_hash <"$tmp/postgres_root_password")
 MONGO_ROOT_PASSWORD_HASH=$(short_hash <"$tmp/mongo_root_password")
 BACKUP_SCRIPT_HASH=$(short_hash <backup.sh)
+ZITADEL_CONFIG_HASH=$(short_hash <"$tmp/zitadel_config.yaml")
+ZITADEL_STEPS_HASH=$(short_hash <"$tmp/zitadel_steps.yaml")
+ZITADEL_MASTERKEY_HASH=$(short_hash <"$tmp/zitadel_masterkey")
 export POSTGRES_ROOT_PASSWORD_HASH MONGO_ROOT_PASSWORD_HASH BACKUP_SCRIPT_HASH
+export ZITADEL_CONFIG_HASH ZITADEL_STEPS_HASH ZITADEL_MASTERKEY_HASH
 
 # public has a fixed subnet so apps can trust the forwarded headers Traefik sends from it.
 docker network inspect public >/dev/null 2>&1 ||
@@ -103,8 +141,13 @@ docker exec -i "$mongo" sh -c \
   'cat >/tmp/setup.js && mongosh --quiet --host "$(hostname)" --file /tmp/setup.js; status=$?; rm -f /tmp/setup.js; exit $status' \
   <"$tmp/mongo.js"
 
+# Waits until Zitadel and the login pages are healthy; if they never are, the deploy times out.
+docker stack deploy --prune --detach=false -c auth.yml "$auth_stack"
+
 # Drop secrets and configs left by earlier deploys; Docker refuses to remove ones still in use.
-for kind in secret config; do
-  docker "$kind" ls -q --filter "label=com.docker.stack.namespace=$stack" |
-    xargs -r docker "$kind" rm >/dev/null 2>&1 || true
+for namespace in "$stack" "$auth_stack"; do
+  for kind in secret config; do
+    docker "$kind" ls -q --filter "label=com.docker.stack.namespace=$namespace" |
+      xargs -r docker "$kind" rm >/dev/null 2>&1 || true
+  done
 done

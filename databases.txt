@@ -4,3 +4,5 @@
 # Removing a line does not drop the database.
 postgres bloodline
 mongo    flexidim
+postgres zitadel
+postgres osagroup

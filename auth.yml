@@ -1,0 +1,131 @@
+# Zitadel, the identity provider at https://${AUTH_DOMAIN}. Deployed by deploy.sh as the stack "auth",
+# after the harbor stack is up and the zitadel database exists; the variables below are set by that script.
+# Upgrade by bumping both image tags together (see the Zitadel release notes first).
+
+x-zitadel-urls: &zitadel-urls
+  ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_REQUIRED: "true"
+  ZITADEL_DEFAULTINSTANCE_FEATURES_LOGINV2_BASEURI: https://${AUTH_DOMAIN}/ui/v2/login/
+  ZITADEL_OIDC_DEFAULTLOGINURLV2: https://${AUTH_DOMAIN}/ui/v2/login/login?authRequest=
+  ZITADEL_OIDC_DEFAULTLOGOUTURLV2: https://${AUTH_DOMAIN}/ui/v2/login/logout?post_logout_redirect=
+  ZITADEL_SAML_DEFAULTLOGINURLV2: https://${AUTH_DOMAIN}/ui/v2/login/login?samlRequest=
+
+services:
+  # Runs init (idempotent, only needs to own its database) and setup on every start.
+  zitadel:
+    image: ghcr.io/zitadel/zitadel:v4.19.3
+    # Root, as in the official compose files: the image user cannot write to the bootstrap volume.
+    user: "0"
+    command:
+      - start-from-init
+      - --config=/run/secrets/zitadel_config
+      - --steps=/run/secrets/zitadel_steps
+      - --masterkeyFile=/run/secrets/zitadel_masterkey
+    environment:
+      <<: *zitadel-urls
+      ZITADEL_PORT: "8080"
+      ZITADEL_EXTERNALDOMAIN: ${AUTH_DOMAIN}
+      ZITADEL_EXTERNALPORT: "443"
+      ZITADEL_EXTERNALSECURE: "true"
+      ZITADEL_TLS_ENABLED: "false"
+      # Only used when the first instance is created. Instance administrators get their own organization;
+      # apps create theirs. The admin password comes from zitadel_steps and must be changed on first login.
+      ZITADEL_FIRSTINSTANCE_INSTANCENAME: Harbor
+      ZITADEL_FIRSTINSTANCE_ORG_NAME: Harbor
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_USERNAME: admin
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORDCHANGEREQUIRED: "true"
+      # A service account with the IAM_OWNER role for Terraform; its token is written to the bootstrap volume.
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_USERNAME: terraform
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_NAME: Terraform
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_PAT_EXPIRATIONDATE: "2099-01-01T00:00:00Z"
+      ZITADEL_FIRSTINSTANCE_PATPATH: /zitadel/bootstrap/terraform.pat
+      ZITADEL_FIRSTINSTANCE_ORG_LOGINCLIENT_MACHINE_USERNAME: login-client
+      ZITADEL_FIRSTINSTANCE_ORG_LOGINCLIENT_MACHINE_NAME: Login client
+      ZITADEL_FIRSTINSTANCE_ORG_LOGINCLIENT_PAT_EXPIRATIONDATE: "2099-01-01T00:00:00Z"
+      ZITADEL_FIRSTINSTANCE_LOGINCLIENTPATPATH: /zitadel/bootstrap/login-client.pat
+    secrets: [zitadel_config, zitadel_steps, zitadel_masterkey]
+    volumes:
+      - bootstrap:/zitadel/bootstrap
+    networks: [public, db]
+    healthcheck:
+      test: [CMD, /app/zitadel, ready]
+      interval: 10s
+      timeout: 30s
+      retries: 12
+      start_period: 2m
+    stop_grace_period: 1m
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+      labels:
+        - traefik.enable=true
+        # Zitadel serves HTTP/1.1, HTTP/2 and gRPC on one cleartext port.
+        - traefik.http.services.zitadel.loadbalancer.server.port=8080
+        - traefik.http.services.zitadel.loadbalancer.server.scheme=h2c
+        - traefik.http.routers.zitadel.rule=Host(`${AUTH_DOMAIN}`) && !PathPrefix(`/ui/v2/login`) && !Path(`/`)
+        - traefik.http.routers.zitadel.priority=100
+        - traefik.http.routers.zitadel.entrypoints=websecure
+        - traefik.http.routers.zitadel.tls.certresolver=letsencrypt
+        - traefik.http.routers.zitadel.service=zitadel
+
+  # The login pages (Next.js). Talks to Zitadel with the login client's token from the bootstrap volume.
+  login:
+    image: ghcr.io/zitadel/zitadel-login:v4.19.3
+    user: "0"
+    environment:
+      ZITADEL_API_URL: http://zitadel:8080
+      NEXT_PUBLIC_BASE_PATH: /ui/v2/login
+      ZITADEL_SERVICE_USER_TOKEN_FILE: /zitadel/bootstrap/login-client.pat
+      ZITADEL_SESSION_COOKIE_SECRET: ${ZITADEL_LOGIN_COOKIE_SECRET}
+      CUSTOM_REQUEST_HEADERS: Host:${AUTH_DOMAIN},X-Forwarded-Proto:https
+    volumes:
+      - bootstrap:/zitadel/bootstrap:ro
+    networks: [public]
+    healthcheck:
+      test: [CMD, node, /app/healthcheck.mjs, http://localhost:3000/ui/v2/login/healthy]
+      interval: 10s
+      timeout: 30s
+      retries: 12
+      start_period: 1m
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+      labels:
+        - traefik.enable=true
+        - traefik.http.services.zitadel-login.loadbalancer.server.port=3000
+        - traefik.http.routers.zitadel-login.rule=Host(`${AUTH_DOMAIN}`) && PathPrefix(`/ui/v2/login`)
+        - traefik.http.routers.zitadel-login.priority=250
+        - traefik.http.routers.zitadel-login.entrypoints=websecure
+        - traefik.http.routers.zitadel-login.tls.certresolver=letsencrypt
+        - traefik.http.routers.zitadel-login.service=zitadel-login
+        # https://${AUTH_DOMAIN}/ shows the login page.
+        - traefik.http.middlewares.zitadel-login-root.replacepath.path=/ui/v2/login/
+        - traefik.http.routers.zitadel-login-root.rule=Host(`${AUTH_DOMAIN}`) && Path(`/`)
+        - traefik.http.routers.zitadel-login-root.priority=400
+        - traefik.http.routers.zitadel-login-root.entrypoints=websecure
+        - traefik.http.routers.zitadel-login-root.tls.certresolver=letsencrypt
+        - traefik.http.routers.zitadel-login-root.middlewares=zitadel-login-root
+        - traefik.http.routers.zitadel-login-root.service=zitadel-login
+
+networks:
+  public:
+    external: true
+  db:
+    external: true
+
+volumes:
+  # Tokens written when the first instance is created: login-client.pat and terraform.pat.
+  bootstrap:
+
+# Secrets can't change in place, so their names carry a content hash.
+secrets:
+  zitadel_config:
+    name: auth_zitadel_config_${ZITADEL_CONFIG_HASH}
+    file: ${SECRETS_DIR}/zitadel_config.yaml
+  zitadel_steps:
+    name: auth_zitadel_steps_${ZITADEL_STEPS_HASH}
+    file: ${SECRETS_DIR}/zitadel_steps.yaml
+  zitadel_masterkey:
+    name: auth_zitadel_masterkey_${ZITADEL_MASTERKEY_HASH}
+    file: ${SECRETS_DIR}/zitadel_masterkey
